@@ -1,0 +1,17 @@
+{
+  "name": "neighborhood-help",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install",
+    "seed": "cd server && npx tsx src/seed.ts",
+    "dev": "concurrently -n backend,frontend -c blue,green \"cd server && PORT=3212 npm run dev\" \"cd client && VITE_PORT=5212 VITE_API_PORT=3212 npm run dev\"",
+    "build": "cd server && npm run build && cd ../client && npm run build",
+    "start": "cd server && PORT=3212 npm run start",
+    "dev:backend": "cd server && PORT=3212 npm run dev",
+    "dev:frontend": "cd client && VITE_PORT=5212 VITE_API_PORT=3212 npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
