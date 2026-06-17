@@ -49,6 +49,18 @@ db.exec(`
     FOREIGN KEY (reviewer_id) REFERENCES users(id),
     FOREIGN KEY (helper_id) REFERENCES users(id)
   );
+
+  CREATE TABLE IF NOT EXISTS qa (
+    id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    parent_id TEXT,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY (request_id) REFERENCES requests(id),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (parent_id) REFERENCES qa(id)
+  );
 `);
 
 export default db;

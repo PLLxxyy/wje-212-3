@@ -64,6 +64,11 @@ export const api = {
   reviewRequest: (id: string, rating: number, comment: string) =>
     request(`/requests/${id}/review`, { method: 'POST', body: JSON.stringify({ rating, comment }) }),
 
+  // QA
+  getQA: (id: string) => request(`/requests/${id}/qa`),
+  postQA: (id: string, content: string, parent_id?: string) =>
+    request(`/requests/${id}/qa`, { method: 'POST', body: JSON.stringify({ content, parent_id }) }),
+
   // User
   getMe: () => request('/users/me'),
   getMyRequests: () => request('/users/me/requests'),

@@ -221,4 +221,69 @@ router.post('/:id/review', authMiddleware, (req: AuthRequest, res: Response) => 
   }
 });
 
+// 获取求助的所有问答
+router.get('/:id/qa', (req: AuthRequest, res: Response) => {
+  try {
+    const request = db.prepare('SELECT id FROM requests WHERE id = ?').get(req.params.id);
+    if (!request) {
+      res.status(404).json({ error: '求助不存在' });
+      return;
+    }
+
+    const qaList = db.prepare(`
+      SELECT q.*, u.nickname as user_name, u.building as user_building
+      FROM qa q
+      LEFT JOIN users u ON q.user_id = u.id
+      WHERE q.request_id = ?
+      ORDER BY q.created_at ASC
+    `).all(req.params.id);
+
+    res.json(qaList);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || '获取问答失败' });
+  }
+});
+
+// 发布问题或回复
+router.post('/:id/qa', authMiddleware, (req: AuthRequest, res: Response) => {
+  try {
+    const { content, parent_id } = req.body;
+
+    if (!content || !content.trim()) {
+      res.status(400).json({ error: '内容不能为空' });
+      return;
+    }
+
+    const request = db.prepare('SELECT id FROM requests WHERE id = ?').get(req.params.id);
+    if (!request) {
+      res.status(404).json({ error: '求助不存在' });
+      return;
+    }
+
+    if (parent_id) {
+      const parent = db.prepare('SELECT id FROM qa WHERE id = ? AND request_id = ?').get(parent_id, req.params.id);
+      if (!parent) {
+        res.status(400).json({ error: '回复的问题不存在' });
+        return;
+      }
+    }
+
+    const id = uuidv4();
+    db.prepare(
+      'INSERT INTO qa (id, request_id, user_id, content, parent_id) VALUES (?, ?, ?, ?, ?)'
+    ).run(id, req.params.id, req.userId, content.trim(), parent_id || null);
+
+    const qaItem = db.prepare(`
+      SELECT q.*, u.nickname as user_name, u.building as user_building
+      FROM qa q
+      LEFT JOIN users u ON q.user_id = u.id
+      WHERE q.id = ?
+    `).get(id);
+
+    res.status(201).json({ message: parent_id ? '回复成功' : '提问成功', qa: qaItem });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || '发布失败' });
+  }
+});
+
 export default router;

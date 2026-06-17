@@ -19,6 +19,14 @@ export default function RequestDetail() {
   const { user, refreshUser } = useAuth();
   const navigate = useNavigate();
 
+  const [qaList, setQaList] = useState<any[]>([]);
+  const [qaLoading, setQaLoading] = useState(false);
+  const [qaContent, setQaContent] = useState('');
+  const [qaSubmitting, setQaSubmitting] = useState(false);
+  const [replyToId, setReplyToId] = useState<string | null>(null);
+  const [replyContent, setReplyContent] = useState('');
+  const [replySubmitting, setReplySubmitting] = useState<string | null>(null);
+
   const fetchDetail = async () => {
     try {
       const data = await api.getRequestDetail(id!);
@@ -30,8 +38,23 @@ export default function RequestDetail() {
     }
   };
 
+  const fetchQA = async () => {
+    try {
+      setQaLoading(true);
+      const data = await api.getQA(id!);
+      setQaList(data);
+    } catch (err: any) {
+      console.error('获取问答失败', err);
+    } finally {
+      setQaLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (id) fetchDetail();
+    if (id) {
+      fetchDetail();
+      fetchQA();
+    }
   }, [id]);
 
   const handleAction = async (action: () => Promise<any>, successMsg: string) => {
@@ -67,6 +90,156 @@ export default function RequestDetail() {
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const handleSubmitQuestion = async () => {
+    if (!qaContent.trim()) return;
+    try {
+      setQaSubmitting(true);
+      await api.postQA(id!, qaContent);
+      setQaContent('');
+      await fetchQA();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setQaSubmitting(false);
+    }
+  };
+
+  const handleSubmitReply = async (parentId: string) => {
+    if (!replyContent.trim()) return;
+    try {
+      setReplySubmitting(parentId);
+      await api.postQA(id!, replyContent, parentId);
+      setReplyToId(null);
+      setReplyContent('');
+      await fetchQA();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setReplySubmitting(null);
+    }
+  };
+
+  const renderQA = () => {
+    const questions = qaList.filter((item: any) => !item.parent_id);
+    const replies = qaList.filter((item: any) => item.parent_id);
+
+    return (
+      <div className="qa-section">
+        <div className="qa-section-title">
+          <span>&#128172;</span> 问答交流 <span style={{ color: '#999', fontWeight: 400, fontSize: 13 }}>({qaList.length})</span>
+        </div>
+
+        {qaLoading ? (
+          <div className="loading"><div className="spinner" /></div>
+        ) : questions.length === 0 ? (
+          <div className="qa-empty">暂无问答，快来第一个提问吧～</div>
+        ) : (
+          <div className="qa-list">
+            {questions.map((q: any) => (
+              <div key={q.id}>
+                <div className="qa-item">
+                  <div className="qa-item-header">
+                    <span className="qa-item-user">
+                      {q.user_name}
+                      <span className="qa-user-building">（{q.user_building}）</span>
+                    </span>
+                    <span className="qa-item-time">{q.created_at}</span>
+                  </div>
+                  <div className="qa-item-content">{q.content}</div>
+                  {user && (
+                    <div className="qa-item-actions">
+                      <button
+                        className="qa-reply-btn"
+                        onClick={() => {
+                          setReplyToId(replyToId === q.id ? null : q.id);
+                          setReplyContent('');
+                        }}
+                      >
+                        {replyToId === q.id ? '取消回复' : '回复'}
+                      </button>
+                    </div>
+                  )}
+                  {replyToId === q.id && (
+                    <div className="qa-reply-form">
+                      <textarea
+                        placeholder="写下你的回复..."
+                        value={replyContent}
+                        onChange={e => setReplyContent(e.target.value)}
+                        rows={2}
+                      />
+                      <div className="qa-reply-form-actions">
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => { setReplyToId(null); setReplyContent(''); }}
+                        >
+                          取消
+                        </button>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => handleSubmitReply(q.id)}
+                          disabled={replySubmitting === q.id || !replyContent.trim()}
+                        >
+                          {replySubmitting === q.id ? '发送中...' : '发送回复'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {replies
+                  .filter((r: any) => r.parent_id === q.id)
+                  .map((r: any) => (
+                    <div key={r.id} className="qa-item is-reply" style={{ marginTop: 8 }}>
+                      <div className="qa-item-header">
+                        <span className="qa-item-user">
+                          {r.user_name}
+                          <span className="qa-user-building">（{r.user_building}）</span>
+                        </span>
+                        <span className="qa-item-time">{r.created_at}</span>
+                      </div>
+                      <div className="qa-item-content">{r.content}</div>
+                    </div>
+                  ))}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {user ? (
+          <div className="qa-form">
+            <div className="qa-form-label">我要提问</div>
+            <textarea
+              placeholder="有什么想问的？比如具体时间、地点、要求等..."
+              value={qaContent}
+              onChange={e => setQaContent(e.target.value)}
+              rows={3}
+              style={{ width: '100%', padding: '10px 14px', border: '1.5px solid #ddd', borderRadius: 8, fontSize: 14, outline: 'none', resize: 'vertical', minHeight: 80, fontFamily: 'inherit' }}
+            />
+            <div className="qa-form-actions">
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => setQaContent('')}
+                disabled={!qaContent.trim()}
+              >
+                清空
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleSubmitQuestion}
+                disabled={qaSubmitting || !qaContent.trim()}
+              >
+                {qaSubmitting ? '发送中...' : '提交提问'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="qa-login-tip">
+            <a onClick={() => navigate('/login')}>登录</a> 后可以提问和回复
+          </div>
+        )}
+      </div>
+    );
   };
 
   if (loading) {
@@ -208,6 +381,8 @@ export default function RequestDetail() {
           </div>
         )}
       </div>
+
+      {renderQA()}
 
       {/* Review Modal */}
       {showReview && (
