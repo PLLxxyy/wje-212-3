@@ -1,8 +1,11 @@
 import request from 'supertest';
 import { v4 as uuidv4 } from 'uuid';
 import bcrypt from 'bcryptjs';
+import Database from 'better-sqlite3';
+import fs from 'fs';
+import path from 'path';
 import { createApp } from '../src/index';
-import db from '../src/database';
+import db, { initDb } from '../src/database';
 import { generateToken } from '../src/auth';
 
 const app = createApp();
@@ -284,6 +287,317 @@ describe('QA API - 匿名和登录用户场景测试', () => {
       const r2 = res.body.find((x: any) => x.id === r2Id);
       expect(r2.is_registered).toBe(1);
       expect(r2.user_name).toBe('测试用户');
+    });
+  });
+
+  describe('外键约束测试 - 数据完整性校验', () => {
+    it('应该拒绝插入不存在的 request_id', () => {
+      const nonExistentRequestId = uuidv4();
+      expect(() => {
+        db.prepare(
+          'INSERT INTO qa (id, request_id, nickname, content) VALUES (?, ?, ?, ?)'
+        ).run(uuidv4(), nonExistentRequestId, '测试用户', '测试内容');
+      }).toThrow();
+    });
+
+    it('应该拒绝插入不存在的 user_id', () => {
+      const nonExistentUserId = uuidv4();
+      expect(() => {
+        db.prepare(
+          'INSERT INTO qa (id, request_id, user_id, content) VALUES (?, ?, ?, ?)'
+        ).run(uuidv4(), testRequestId, nonExistentUserId, '测试内容');
+      }).toThrow();
+    });
+
+    it('应该拒绝插入不存在的 parent_id', () => {
+      const nonExistentParentId = uuidv4();
+      expect(() => {
+        db.prepare(
+          'INSERT INTO qa (id, request_id, nickname, content, parent_id) VALUES (?, ?, ?, ?, ?)'
+        ).run(uuidv4(), testRequestId, '测试用户', '测试回复', nonExistentParentId);
+      }).toThrow();
+    });
+
+    it('user_id 为 NULL 时应该允许插入（匿名用户）', () => {
+      expect(() => {
+        db.prepare(
+          'INSERT INTO qa (id, request_id, nickname, content) VALUES (?, ?, ?, ?)'
+        ).run(uuidv4(), testRequestId, '匿名用户', '匿名提问');
+      }).not.toThrow();
+    });
+
+    it('parent_id 为 NULL 时应该允许插入（新问题）', () => {
+      expect(() => {
+        db.prepare(
+          'INSERT INTO qa (id, request_id, user_id, content) VALUES (?, ?, ?, ?)'
+        ).run(uuidv4(), testRequestId, testUserId, '新问题');
+      }).not.toThrow();
+    });
+  });
+
+  describe('数据库结构校验测试', () => {
+    it('qa 表应该包含所有必需字段', () => {
+      const columns = db.prepare("PRAGMA table_info(qa)").all() as { name: string; notnull: number }[];
+      const columnNames = columns.map(c => c.name);
+
+      expect(columnNames).toContain('id');
+      expect(columnNames).toContain('request_id');
+      expect(columnNames).toContain('user_id');
+      expect(columnNames).toContain('nickname');
+      expect(columnNames).toContain('content');
+      expect(columnNames).toContain('parent_id');
+      expect(columnNames).toContain('created_at');
+    });
+
+    it('user_id 字段应该允许 NULL', () => {
+      const columns = db.prepare("PRAGMA table_info(qa)").all() as { name: string; notnull: number }[];
+      const userIdCol = columns.find(c => c.name === 'user_id');
+      expect(userIdCol).toBeDefined();
+      expect(userIdCol!.notnull).toBe(0);
+    });
+
+    it('应该存在所有必需的外键约束', () => {
+      const foreignKeys = db.prepare("PRAGMA foreign_key_list(qa)").all() as { table: string; from: string }[];
+
+      const hasRequestFK = foreignKeys.some(fk => fk.table === 'requests' && fk.from === 'request_id');
+      const hasUserFK = foreignKeys.some(fk => fk.table === 'users' && fk.from === 'user_id');
+      const hasParentFK = foreignKeys.some(fk => fk.table === 'qa' && fk.from === 'parent_id');
+
+      expect(hasRequestFK).toBe(true);
+      expect(hasUserFK).toBe(true);
+      expect(hasParentFK).toBe(true);
+    });
+
+    it('request_id 字段应该为 NOT NULL', () => {
+      const columns = db.prepare("PRAGMA table_info(qa)").all() as { name: string; notnull: number }[];
+      const requestIdCol = columns.find(c => c.name === 'request_id');
+      expect(requestIdCol).toBeDefined();
+      expect(requestIdCol!.notnull).toBe(1);
+    });
+  });
+
+  describe('数据库迁移场景测试 - 模拟旧库升级', () => {
+    let tempDbPath: string;
+
+    beforeEach(() => {
+      tempDbPath = path.join(__dirname, `temp-test-${uuidv4()}.db`);
+    });
+
+    afterEach(() => {
+      if (fs.existsSync(tempDbPath)) {
+        fs.unlinkSync(tempDbPath);
+      }
+      const shmPath = tempDbPath + '-shm';
+      const walPath = tempDbPath + '-wal';
+      if (fs.existsSync(shmPath)) fs.unlinkSync(shmPath);
+      if (fs.existsSync(walPath)) fs.unlinkSync(walPath);
+    });
+
+    it('应该正确迁移 user_id NOT NULL 的旧表到允许 NULL', () => {
+      const tempDb = new Database(tempDbPath);
+
+      tempDb.pragma('foreign_keys = ON');
+
+      tempDb.exec(`
+        CREATE TABLE users (
+          id TEXT PRIMARY KEY,
+          username TEXT UNIQUE NOT NULL,
+          password TEXT NOT NULL,
+          nickname TEXT NOT NULL,
+          phone TEXT NOT NULL,
+          building TEXT NOT NULL
+        );
+        CREATE TABLE requests (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          description TEXT NOT NULL,
+          reward TEXT NOT NULL,
+          deadline TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        CREATE TABLE qa (
+          id TEXT PRIMARY KEY,
+          request_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          content TEXT NOT NULL,
+          parent_id TEXT,
+          created_at TEXT DEFAULT (datetime('now','localtime')),
+          FOREIGN KEY (request_id) REFERENCES requests(id),
+          FOREIGN KEY (user_id) REFERENCES users(id),
+          FOREIGN KEY (parent_id) REFERENCES qa(id)
+        );
+      `);
+
+      const userId = uuidv4();
+      const requestId = uuidv4();
+      const qaId = uuidv4();
+
+      tempDb.prepare('INSERT INTO users (id, username, password, nickname, phone, building) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(userId, 'test', 'pass', 'Test', '13800001111', 'A栋');
+      tempDb.prepare('INSERT INTO requests (id, user_id, type, description, reward, deadline) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(requestId, userId, '代买', '测试', '10元', '今天');
+      tempDb.prepare('INSERT INTO qa (id, request_id, user_id, content) VALUES (?, ?, ?, ?)')
+        .run(qaId, requestId, userId, '旧数据');
+
+      tempDb.close();
+
+      const migratedDb = initDb(tempDbPath);
+
+      const columns = migratedDb.prepare("PRAGMA table_info(qa)").all() as { name: string; notnull: number }[];
+      const hasNickname = columns.some(c => c.name === 'nickname');
+      const userIdCol = columns.find(c => c.name === 'user_id');
+
+      expect(hasNickname).toBe(true);
+      expect(userIdCol!.notnull).toBe(0);
+
+      const foreignKeys = migratedDb.prepare("PRAGMA foreign_key_list(qa)").all() as { table: string; from: string }[];
+      const hasRequestFK = foreignKeys.some(fk => fk.table === 'requests' && fk.from === 'request_id');
+      const hasUserFK = foreignKeys.some(fk => fk.table === 'users' && fk.from === 'user_id');
+      const hasParentFK = foreignKeys.some(fk => fk.table === 'qa' && fk.from === 'parent_id');
+
+      expect(hasRequestFK).toBe(true);
+      expect(hasUserFK).toBe(true);
+      expect(hasParentFK).toBe(true);
+
+      const data = migratedDb.prepare('SELECT * FROM qa WHERE id = ?').get(qaId) as any;
+      expect(data).toBeDefined();
+      expect(data.content).toBe('旧数据');
+      expect(data.user_id).toBe(userId);
+      expect(data.nickname).toBeNull();
+
+      migratedDb.close();
+    });
+
+    it('应该正确修复缺失外键的旧表', () => {
+      const tempDb = new Database(tempDbPath);
+
+      tempDb.pragma('foreign_keys = ON');
+
+      tempDb.exec(`
+        CREATE TABLE users (
+          id TEXT PRIMARY KEY,
+          username TEXT UNIQUE NOT NULL,
+          password TEXT NOT NULL,
+          nickname TEXT NOT NULL,
+          phone TEXT NOT NULL,
+          building TEXT NOT NULL
+        );
+        CREATE TABLE requests (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          description TEXT NOT NULL,
+          reward TEXT NOT NULL,
+          deadline TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        CREATE TABLE qa (
+          id TEXT PRIMARY KEY,
+          request_id TEXT NOT NULL,
+          user_id TEXT,
+          nickname TEXT,
+          content TEXT NOT NULL,
+          parent_id TEXT,
+          created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+      `);
+
+      const userId = uuidv4();
+      const requestId = uuidv4();
+      const qaId = uuidv4();
+
+      tempDb.prepare('INSERT INTO users (id, username, password, nickname, phone, building) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(userId, 'test', 'pass', 'Test', '13800001111', 'A栋');
+      tempDb.prepare('INSERT INTO requests (id, user_id, type, description, reward, deadline) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(requestId, userId, '代买', '测试', '10元', '今天');
+      tempDb.prepare('INSERT INTO qa (id, request_id, user_id, nickname, content) VALUES (?, ?, ?, ?, ?)')
+        .run(qaId, requestId, userId, null, '旧数据无外键');
+
+      tempDb.close();
+
+      const migratedDb = initDb(tempDbPath);
+
+      const foreignKeys = migratedDb.prepare("PRAGMA foreign_key_list(qa)").all() as { table: string; from: string }[];
+      const hasRequestFK = foreignKeys.some(fk => fk.table === 'requests' && fk.from === 'request_id');
+      const hasUserFK = foreignKeys.some(fk => fk.table === 'users' && fk.from === 'user_id');
+      const hasParentFK = foreignKeys.some(fk => fk.table === 'qa' && fk.from === 'parent_id');
+
+      expect(hasRequestFK).toBe(true);
+      expect(hasUserFK).toBe(true);
+      expect(hasParentFK).toBe(true);
+
+      expect(() => {
+        migratedDb.prepare('INSERT INTO qa (id, request_id, nickname, content) VALUES (?, ?, ?, ?)')
+          .run(uuidv4(), 'non-existent', '测试', '应该失败');
+      }).toThrow();
+
+      const data = migratedDb.prepare('SELECT * FROM qa WHERE id = ?').get(qaId) as any;
+      expect(data).toBeDefined();
+      expect(data.content).toBe('旧数据无外键');
+
+      migratedDb.close();
+    });
+  });
+
+  describe('接口回归测试', () => {
+    it('匿名用户提问后应该能查询到', async () => {
+      const postRes = await request(app)
+        .post(`/api/requests/${testRequestId}/qa`)
+        .send({ content: '回归测试提问', nickname: '测试用户' });
+
+      expect(postRes.status).toBe(201);
+      const qaId = postRes.body.qa.id;
+
+      const getRes = await request(app).get(`/api/requests/${testRequestId}/qa`);
+      expect(getRes.status).toBe(200);
+      const qa = getRes.body.find((x: any) => x.id === qaId);
+      expect(qa).toBeDefined();
+      expect(qa.content).toBe('回归测试提问');
+      expect(qa.user_name).toBe('测试用户');
+      expect(qa.is_registered).toBe(0);
+    });
+
+    it('登录用户提问后应该能查询到', async () => {
+      const postRes = await request(app)
+        .post(`/api/requests/${testRequestId}/qa`)
+        .set('Authorization', `Bearer ${testToken}`)
+        .send({ content: '登录用户回归测试' });
+
+      expect(postRes.status).toBe(201);
+      const qaId = postRes.body.qa.id;
+
+      const getRes = await request(app).get(`/api/requests/${testRequestId}/qa`);
+      expect(getRes.status).toBe(200);
+      const qa = getRes.body.find((x: any) => x.id === qaId);
+      expect(qa).toBeDefined();
+      expect(qa.content).toBe('登录用户回归测试');
+      expect(qa.user_name).toBe('测试用户');
+      expect(qa.is_registered).toBe(1);
+      expect(qa.user_building).toBe('A栋1单元101');
+    });
+
+    it('匿名和登录用户混合问答应该正确展示', async () => {
+      await request(app)
+        .post(`/api/requests/${testRequestId}/qa`)
+        .send({ content: '匿名问题1', nickname: '匿名A' });
+
+      await request(app)
+        .post(`/api/requests/${testRequestId}/qa`)
+        .set('Authorization', `Bearer ${testToken}`)
+        .send({ content: '登录问题1' });
+
+      const qas = await request(app).get(`/api/requests/${testRequestId}/qa`);
+      expect(qas.status).toBe(200);
+      expect(qas.body.length).toBe(2);
+
+      const anonymousQa = qas.body.find((x: any) => x.content === '匿名问题1');
+      const loggedInQa = qas.body.find((x: any) => x.content === '登录问题1');
+
+      expect(anonymousQa.is_registered).toBe(0);
+      expect(anonymousQa.user_name).toBe('匿名A');
+      expect(loggedInQa.is_registered).toBe(1);
+      expect(loggedInQa.user_name).toBe('测试用户');
     });
   });
 });

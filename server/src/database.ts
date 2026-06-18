@@ -66,18 +66,73 @@ const initDb = (dbPath?: string): Database.Database => {
   `);
 
   // 迁移：如果 qa 表缺少 nickname 列，添加它
-  const columns = db.prepare("PRAGMA table_info(qa)").all() as { name: string }[];
+  let columns = db.prepare("PRAGMA table_info(qa)").all() as { name: string; notnull: number }[];
   const hasNickname = columns.some(c => c.name === 'nickname');
   if (!hasNickname) {
     db.exec('ALTER TABLE qa ADD COLUMN nickname TEXT');
+    columns = db.prepare("PRAGMA table_info(qa)").all() as { name: string; notnull: number }[];
   }
   // 迁移：如果 qa 表的 user_id 是 NOT NULL，修改为允许 NULL
   const user_id_col = columns.find(c => c.name === 'user_id');
-  if (user_id_col && (user_id_col as any).notnull) {
-    db.exec('CREATE TABLE qa_new (id TEXT PRIMARY KEY, request_id TEXT NOT NULL, user_id TEXT, nickname TEXT, content TEXT NOT NULL, parent_id TEXT, created_at TEXT DEFAULT (datetime(\'now\',\'localtime\')))');
+  if (user_id_col && user_id_col.notnull) {
+    db.pragma('foreign_keys = OFF');
+    db.exec('DROP TABLE IF EXISTS qa_new');
+    db.exec(`
+      CREATE TABLE qa_new (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        user_id TEXT,
+        nickname TEXT,
+        content TEXT NOT NULL,
+        parent_id TEXT,
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        FOREIGN KEY (request_id) REFERENCES requests(id),
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (parent_id) REFERENCES qa(id)
+      )
+    `);
     db.exec('INSERT INTO qa_new (id, request_id, user_id, nickname, content, parent_id, created_at) SELECT id, request_id, user_id, NULL, content, parent_id, created_at FROM qa');
     db.exec('DROP TABLE qa');
     db.exec('ALTER TABLE qa_new RENAME TO qa');
+    db.pragma('foreign_keys = ON');
+  }
+
+  // 结构校验：检查外键约束是否存在
+  const foreignKeys = db.prepare("PRAGMA foreign_key_list(qa)").all() as { table: string; from: string }[];
+  const expectedFKs = [
+    { table: 'requests', from: 'request_id' },
+    { table: 'users', from: 'user_id' },
+    { table: 'qa', from: 'parent_id' }
+  ];
+  let needsRebuild = false;
+  for (const expected of expectedFKs) {
+    const exists = foreignKeys.some(fk => fk.table === expected.table && fk.from === expected.from);
+    if (!exists) {
+      needsRebuild = true;
+      break;
+    }
+  }
+  if (needsRebuild) {
+    db.pragma('foreign_keys = OFF');
+    db.exec('DROP TABLE IF EXISTS qa_fixed');
+    db.exec(`
+      CREATE TABLE qa_fixed (
+        id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        user_id TEXT,
+        nickname TEXT,
+        content TEXT NOT NULL,
+        parent_id TEXT,
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        FOREIGN KEY (request_id) REFERENCES requests(id),
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (parent_id) REFERENCES qa(id)
+      )
+    `);
+    db.exec('INSERT INTO qa_fixed (id, request_id, user_id, nickname, content, parent_id, created_at) SELECT id, request_id, user_id, nickname, content, parent_id, created_at FROM qa');
+    db.exec('DROP TABLE qa');
+    db.exec('ALTER TABLE qa_fixed RENAME TO qa');
+    db.pragma('foreign_keys = ON');
   }
 
   return db;
