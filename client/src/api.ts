@@ -66,8 +66,8 @@ export const api = {
 
   // QA
   getQA: (id: string) => request(`/requests/${id}/qa`),
-  postQA: (id: string, content: string, parent_id?: string) =>
-    request(`/requests/${id}/qa`, { method: 'POST', body: JSON.stringify({ content, parent_id }) }),
+  postQA: (id: string, content: string, parent_id?: string, nickname?: string) =>
+    request(`/requests/${id}/qa`, { method: 'POST', body: JSON.stringify({ content, parent_id, nickname }) }),
 
   // User
   getMe: () => request('/users/me'),

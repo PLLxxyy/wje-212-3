@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import db from '../database';
-import { authMiddleware, AuthRequest } from '../auth';
+import { authMiddleware, optionalAuthMiddleware, AuthRequest } from '../auth';
 
 const router = Router();
 
@@ -231,7 +231,10 @@ router.get('/:id/qa', (req: AuthRequest, res: Response) => {
     }
 
     const qaList = db.prepare(`
-      SELECT q.*, u.nickname as user_name, u.building as user_building
+      SELECT q.*,
+             COALESCE(u.nickname, q.nickname) as user_name,
+             u.building as user_building,
+             CASE WHEN q.user_id IS NOT NULL THEN 1 ELSE 0 END as is_registered
       FROM qa q
       LEFT JOIN users u ON q.user_id = u.id
       WHERE q.request_id = ?
@@ -244,10 +247,10 @@ router.get('/:id/qa', (req: AuthRequest, res: Response) => {
   }
 });
 
-// 发布问题或回复
-router.post('/:id/qa', authMiddleware, (req: AuthRequest, res: Response) => {
+// 发布问题或回复（支持匿名和登录用户）
+router.post('/:id/qa', optionalAuthMiddleware, (req: AuthRequest, res: Response) => {
   try {
-    const { content, parent_id } = req.body;
+    const { content, parent_id, nickname } = req.body;
 
     if (!content || !content.trim()) {
       res.status(400).json({ error: '内容不能为空' });
@@ -268,13 +271,29 @@ router.post('/:id/qa', authMiddleware, (req: AuthRequest, res: Response) => {
       }
     }
 
+    // 未登录用户必须提供昵称
+    const isAnonymous = !req.userId;
+    if (isAnonymous) {
+      if (!nickname || !nickname.trim()) {
+        res.status(400).json({ error: '请填写昵称' });
+        return;
+      }
+      if (nickname.trim().length > 20) {
+        res.status(400).json({ error: '昵称不能超过20个字符' });
+        return;
+      }
+    }
+
     const id = uuidv4();
     db.prepare(
-      'INSERT INTO qa (id, request_id, user_id, content, parent_id) VALUES (?, ?, ?, ?, ?)'
-    ).run(id, req.params.id, req.userId, content.trim(), parent_id || null);
+      'INSERT INTO qa (id, request_id, user_id, nickname, content, parent_id) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(id, req.params.id, req.userId || null, isAnonymous ? nickname.trim() : null, content.trim(), parent_id || null);
 
     const qaItem = db.prepare(`
-      SELECT q.*, u.nickname as user_name, u.building as user_building
+      SELECT q.*,
+             COALESCE(u.nickname, q.nickname) as user_name,
+             u.building as user_building,
+             CASE WHEN q.user_id IS NOT NULL THEN 1 ELSE 0 END as is_registered
       FROM qa q
       LEFT JOIN users u ON q.user_id = u.id
       WHERE q.id = ?

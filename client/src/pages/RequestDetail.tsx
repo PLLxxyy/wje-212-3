@@ -22,9 +22,11 @@ export default function RequestDetail() {
   const [qaList, setQaList] = useState<any[]>([]);
   const [qaLoading, setQaLoading] = useState(false);
   const [qaContent, setQaContent] = useState('');
+  const [qaNickname, setQaNickname] = useState('');
   const [qaSubmitting, setQaSubmitting] = useState(false);
   const [replyToId, setReplyToId] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState('');
+  const [replyNickname, setReplyNickname] = useState('');
   const [replySubmitting, setReplySubmitting] = useState<string | null>(null);
 
   const fetchDetail = async () => {
@@ -94,10 +96,15 @@ export default function RequestDetail() {
 
   const handleSubmitQuestion = async () => {
     if (!qaContent.trim()) return;
+    if (!user && !qaNickname.trim()) {
+      setMessage({ type: 'error', text: '请填写昵称' });
+      return;
+    }
     try {
       setQaSubmitting(true);
-      await api.postQA(id!, qaContent);
+      await api.postQA(id!, qaContent, undefined, user ? undefined : qaNickname.trim());
       setQaContent('');
+      setQaNickname('');
       await fetchQA();
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message });
@@ -108,11 +115,16 @@ export default function RequestDetail() {
 
   const handleSubmitReply = async (parentId: string) => {
     if (!replyContent.trim()) return;
+    if (!user && !replyNickname.trim()) {
+      setMessage({ type: 'error', text: '请填写昵称' });
+      return;
+    }
     try {
       setReplySubmitting(parentId);
-      await api.postQA(id!, replyContent, parentId);
+      await api.postQA(id!, replyContent, parentId, user ? undefined : replyNickname.trim());
       setReplyToId(null);
       setReplyContent('');
+      setReplyNickname('');
       await fetchQA();
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message });
@@ -120,6 +132,17 @@ export default function RequestDetail() {
       setReplySubmitting(null);
     }
   };
+
+  const renderUserInfo = (item: any) => (
+    <span className="qa-item-user">
+      {item.user_name}
+      {item.is_registered && item.user_building ? (
+        <span className="qa-user-building">（{item.user_building}）</span>
+      ) : !item.is_registered ? (
+        <span className="qa-user-building" style={{ color: '#FF9800' }}>（匿名）</span>
+      ) : null}
+    </span>
+  );
 
   const renderQA = () => {
     const questions = qaList.filter((item: any) => !item.parent_id);
@@ -141,28 +164,35 @@ export default function RequestDetail() {
               <div key={q.id}>
                 <div className="qa-item">
                   <div className="qa-item-header">
-                    <span className="qa-item-user">
-                      {q.user_name}
-                      <span className="qa-user-building">（{q.user_building}）</span>
-                    </span>
+                    {renderUserInfo(q)}
                     <span className="qa-item-time">{q.created_at}</span>
                   </div>
                   <div className="qa-item-content">{q.content}</div>
-                  {user && (
-                    <div className="qa-item-actions">
-                      <button
-                        className="qa-reply-btn"
-                        onClick={() => {
-                          setReplyToId(replyToId === q.id ? null : q.id);
-                          setReplyContent('');
-                        }}
-                      >
-                        {replyToId === q.id ? '取消回复' : '回复'}
-                      </button>
-                    </div>
-                  )}
+                  <div className="qa-item-actions">
+                    <button
+                      className="qa-reply-btn"
+                      onClick={() => {
+                        setReplyToId(replyToId === q.id ? null : q.id);
+                        setReplyContent('');
+                        setReplyNickname('');
+                      }}
+                    >
+                      {replyToId === q.id ? '取消回复' : '回复'}
+                    </button>
+                  </div>
                   {replyToId === q.id && (
                     <div className="qa-reply-form">
+                      {!user && (
+                        <div className="form-group" style={{ marginBottom: 10 }}>
+                          <input
+                            type="text"
+                            placeholder="请输入您的昵称"
+                            value={replyNickname}
+                            onChange={e => setReplyNickname(e.target.value)}
+                            style={{ width: '100%', padding: '8px 10px', border: '1px solid #ddd', borderRadius: 6, fontSize: 13, outline: 'none', fontFamily: 'inherit' }}
+                          />
+                        </div>
+                      )}
                       <textarea
                         placeholder="写下你的回复..."
                         value={replyContent}
@@ -172,14 +202,14 @@ export default function RequestDetail() {
                       <div className="qa-reply-form-actions">
                         <button
                           className="btn btn-secondary btn-sm"
-                          onClick={() => { setReplyToId(null); setReplyContent(''); }}
+                          onClick={() => { setReplyToId(null); setReplyContent(''); setReplyNickname(''); }}
                         >
                           取消
                         </button>
                         <button
                           className="btn btn-primary btn-sm"
                           onClick={() => handleSubmitReply(q.id)}
-                          disabled={replySubmitting === q.id || !replyContent.trim()}
+                          disabled={replySubmitting === q.id || !replyContent.trim() || (!user && !replyNickname.trim())}
                         >
                           {replySubmitting === q.id ? '发送中...' : '发送回复'}
                         </button>
@@ -192,10 +222,7 @@ export default function RequestDetail() {
                   .map((r: any) => (
                     <div key={r.id} className="qa-item is-reply" style={{ marginTop: 8 }}>
                       <div className="qa-item-header">
-                        <span className="qa-item-user">
-                          {r.user_name}
-                          <span className="qa-user-building">（{r.user_building}）</span>
-                        </span>
+                        {renderUserInfo(r)}
                         <span className="qa-item-time">{r.created_at}</span>
                       </div>
                       <div className="qa-item-content">{r.content}</div>
@@ -206,38 +233,43 @@ export default function RequestDetail() {
           </div>
         )}
 
-        {user ? (
-          <div className="qa-form">
-            <div className="qa-form-label">我要提问</div>
-            <textarea
-              placeholder="有什么想问的？比如具体时间、地点、要求等..."
-              value={qaContent}
-              onChange={e => setQaContent(e.target.value)}
-              rows={3}
-              style={{ width: '100%', padding: '10px 14px', border: '1.5px solid #ddd', borderRadius: 8, fontSize: 14, outline: 'none', resize: 'vertical', minHeight: 80, fontFamily: 'inherit' }}
-            />
-            <div className="qa-form-actions">
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => setQaContent('')}
-                disabled={!qaContent.trim()}
-              >
-                清空
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleSubmitQuestion}
-                disabled={qaSubmitting || !qaContent.trim()}
-              >
-                {qaSubmitting ? '发送中...' : '提交提问'}
-              </button>
+        <div className="qa-form">
+          <div className="qa-form-label">我要提问</div>
+          {!user && (
+            <div className="form-group" style={{ marginBottom: 10 }}>
+              <input
+                type="text"
+                placeholder="请输入您的昵称"
+                value={qaNickname}
+                onChange={e => setQaNickname(e.target.value)}
+                style={{ width: '100%', padding: '10px 14px', border: '1.5px solid #ddd', borderRadius: 8, fontSize: 14, outline: 'none', fontFamily: 'inherit' }}
+              />
             </div>
+          )}
+          <textarea
+            placeholder="有什么想问的？比如具体时间、地点、要求等..."
+            value={qaContent}
+            onChange={e => setQaContent(e.target.value)}
+            rows={3}
+            style={{ width: '100%', padding: '10px 14px', border: '1.5px solid #ddd', borderRadius: 8, fontSize: 14, outline: 'none', resize: 'vertical', minHeight: 80, fontFamily: 'inherit' }}
+          />
+          <div className="qa-form-actions">
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => { setQaContent(''); setQaNickname(''); }}
+              disabled={!qaContent.trim()}
+            >
+              清空
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={handleSubmitQuestion}
+              disabled={qaSubmitting || !qaContent.trim() || (!user && !qaNickname.trim())}
+            >
+              {qaSubmitting ? '发送中...' : '提交提问'}
+            </button>
           </div>
-        ) : (
-          <div className="qa-login-tip">
-            <a onClick={() => navigate('/login')}>登录</a> 后可以提问和回复
-          </div>
-        )}
+        </div>
       </div>
     );
   };
